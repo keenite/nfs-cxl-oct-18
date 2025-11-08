@@ -22,6 +22,12 @@
 #include <linux/nfs_page.h>
 #include <linux/module.h>
 
+#include <linux/hashtable.h>
+
+#include <linux/io.h>
+#include <linux/types.h>
+#include <linux/init.h>
+
 #include "nfs4_fs.h"
 #include "internal.h"
 #include "iostat.h"
@@ -35,6 +41,87 @@ static const struct nfs_pgio_completion_ops nfs_async_read_completion_ops;
 static const struct nfs_rw_ops nfs_rw_read_ops;
 
 static struct kmem_cache *nfs_rdata_cachep;
+
+
+///////////////////////////////////////////////////////////////////////
+#define CXL_ADDR 0x410000000
+#define REGION_SIZE (1UL << 30)
+#define MAX_PAYLOAD_SIZE 32
+
+#define CXL_HASH_BITS_SIZE 8
+#define BUCKET_COUNT (1 << CXL_HASH_BITS_SIZE)
+
+#define CXL_HASH_BITS ilog2(BUCKET_COUNT)   // HASH_BITS(name)
+
+/* Use hash_32 when possible to allow for fast 32bit hashing in 64bit kernels. */
+#define cxl_hash_min(val, bits)							\
+	(sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits))
+
+#define cxl_hash_for_each_possible(name, obj, member, key)			\
+	hlist_for_each_entry(obj, &name[hash_min(key, CXL_HASH_BITS)], member)
+
+static unsigned allocate_index = 1u;
+
+struct cxl_entry {
+    u32 key;            // The key we will hash on
+    char payload[MAX_PAYLOAD_SIZE];   // Some example data
+    struct hlist_node node; // The all-important hash table node
+};
+
+// Mapped CXL hashtable base address
+void __iomem *cxl_base = NULL;
+
+// The hashtable header address.
+struct hlist_head __iomem (*cxl_ht)[BUCKET_COUNT];
+
+// The memory address.
+void __iomem *data_base = NULL;
+
+static void cxl_mem_test(void) {
+	struct cxl_entry *obj =
+		(struct cxl_entry *)(data_base +
+				     allocate_index * sizeof(struct cxl_entry));
+	sprintf(obj->payload, "Hello %u", allocate_index);
+	obj->key = allocate_index++;
+	INIT_HLIST_NODE(&obj->node);
+	pr_info("@@@@@@Read %u index to the memory", allocate_index);
+
+	hlist_add_head(&obj->node,
+		       cxl_ht[cxl_hash_min(obj->key, CXL_HASH_BITS)]);
+}
+
+static void cxl_mem_read1(void) {
+	struct cxl_entry* obj = NULL;
+	unsigned key1 = 1u;
+	cxl_hash_for_each_possible(*cxl_ht, obj, node, key1) {
+		pr_info("@@@@Current index %u data: %s", obj->key, obj->payload);
+	}
+}
+
+static void cxl_mem_read2(void) {
+	struct cxl_entry* obj = NULL;
+	unsigned key1 = 2u;
+	cxl_hash_for_each_possible(*cxl_ht, obj, node, key1) {
+		pr_info("@@@@Current index %u data: %s", obj->key, obj->payload);
+	}
+}
+
+static void cxl_mem_init(void) {
+	if (cxl_base != NULL) return;
+	cxl_base = memremap(CXL_ADDR, REGION_SIZE, MEMREMAP_WB);
+	if (!cxl_base) {
+		pr_err("@@@@@@Failed to memory map !!!!!!!!!");
+	}
+	cxl_ht = (struct hlist_head (*)[BUCKET_COUNT])cxl_base;
+	for (unsigned int i = 0u; i < BUCKET_COUNT; i++) {
+		cxl_ht[i]->first = NULL; // Checks the HLIST_HEAD_INIT.
+		INIT_HLIST_HEAD(cxl_ht[i]);
+	}
+	data_base = cxl_base + sizeof(struct hlist_head) * BUCKET_COUNT;
+}
+
+
+//////////////////////////////////////////////////////////////////////
 
 static struct nfs_pgio_header *nfs_readhdr_alloc(void)
 {
@@ -434,6 +521,12 @@ int __init nfs_init_readpagecache(void)
 	if (nfs_rdata_cachep == NULL)
 		return -ENOMEM;
 
+	cxl_mem_init();
+	cxl_mem_test();
+	cxl_mem_test();
+
+	cxl_mem_read1();
+	cxl_mem_read2();
 	return 0;
 }
 
