@@ -57,8 +57,23 @@ static struct kmem_cache *nfs_rdata_cachep;
 #define cxl_hash_min(val, bits)							\
 	(sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits))
 
-#define cxl_hash_for_each_possible(name, obj, member, key)			\
-	hlist_for_each_entry(obj, &name[hash_min(key, CXL_HASH_BITS)], member)
+#define cxl_hlist_entry_safe(ptr, type, member, base)                \
+	({                                                           \
+		typeof(ptr) ____ptr =                                \
+			(struct hlist_node*)((unsigned long)(ptr) + (unsigned long)base);  \
+		____ptr ? hlist_entry(____ptr, type, member) : NULL; \
+	})
+
+#define cxl_hlist_for_each_entry(pos, head, member, base)                      \
+	for (pos = cxl_hlist_entry_safe((head)->first, typeof(*(pos)), member, \
+					base);                                 \
+	     pos != base;                                                      \
+	     pos = cxl_hlist_entry_safe((pos)->member.next, typeof(*(pos)),    \
+					member, base))
+
+#define cxl_hash_for_each_possible(name, obj, member, key, base)               \
+	cxl_hlist_for_each_entry(obj, &name[cxl_hash_min(key, CXL_HASH_BITS)], \
+				 member, base)
 
 static unsigned allocate_index = 1u;
 
@@ -152,16 +167,27 @@ static void cxl_mem_test(void) {
 static void cxl_mem_read1(void) {
 	struct cxl_entry* obj = NULL;
 	unsigned key1 = 1u;
-	cxl_hash_for_each_possible(*cxl_ht, obj, node, key1) {
-		pr_info("@@@@Current index %u data: %s", obj->key, obj->payload);
+	int count = 0;
+	cxl_hash_for_each_possible(*cxl_ht, obj, node, key1, cxl_base) {
+		pr_info("@@@@Current index %u data: %s obj_addr[%px], next[%px]",
+			obj->key, obj->payload, obj, obj->node.next);
+		if (count++ ==10) {
+			pr_info("@@@@ Count reach 10");
+			break;
+		}
 	}
 }
 
 static void cxl_mem_read2(void) {
 	struct cxl_entry* obj = NULL;
 	unsigned key1 = 2u;
-	cxl_hash_for_each_possible(*cxl_ht, obj, node, key1) {
+	int count = 0;
+	cxl_hash_for_each_possible(*cxl_ht, obj, node, key1, cxl_base) {
 		pr_info("@@@@Current index %u data: %s", obj->key, obj->payload);
+		if (count++ ==10) {
+			pr_info("@@@@ Count reach 10");
+			break;
+		}
 	}
 }
 
@@ -587,8 +613,10 @@ int __init nfs_init_readpagecache(void)
 	cxl_mem_test();
 	cxl_mem_test();
 
-	//cxl_mem_read1();
-	//cxl_mem_read2();
+	cxl_mem_read1();
+	cxl_mem_read2();
+
+	pr_info("The cache initialization is done.");
 	return 0;
 }
 
