@@ -48,7 +48,7 @@ static struct kmem_cache *nfs_rdata_cachep;
 #define REGION_SIZE (1UL << 30)
 #define MAX_PAYLOAD_SIZE 32
 
-#define CXL_HASH_BITS_SIZE 8
+#define CXL_HASH_BITS_SIZE 1
 #define BUCKET_COUNT (1 << CXL_HASH_BITS_SIZE)
 
 #define CXL_HASH_BITS ilog2(BUCKET_COUNT)   // HASH_BITS(name)
@@ -63,31 +63,90 @@ static struct kmem_cache *nfs_rdata_cachep;
 static unsigned allocate_index = 1u;
 
 struct cxl_entry {
+    struct hlist_node node; // The all-important hash table node
     u32 key;            // The key we will hash on
     char payload[MAX_PAYLOAD_SIZE];   // Some example data
-    struct hlist_node node; // The all-important hash table node
 };
 
 // Mapped CXL hashtable base address
-void __iomem *cxl_base = NULL;
+void  *cxl_base = NULL;
 
 // The hashtable header address.
 struct hlist_head __iomem (*cxl_ht)[BUCKET_COUNT];
 
 // The memory address.
-void __iomem *data_base = NULL;
+void  *data_base = NULL;
+
+#define ADDR_TO_OFFSET_NODE_2(addr, base) \
+	(struct hlist_node **)(((void*)addr - (void*)base))
+
+#define ADDR_TO_OFFSET_NODE_1(addr, base) \
+	(struct hlist_node *)(((void*)addr - (void*)base))
+
+#define ADDR_TO_OFFSET_HEAD(addr, base) \
+	(struct hlist_node **)(((void*)addr - (void*)base))
+
+#define OFFSET_TO_ADDR_NODE(offset, base) \
+	(struct hlist_node *)(((unsigned long)offset + (unsigned long)base))
+
+static inline void cxl_hlist_add_head(struct hlist_node *n, struct hlist_head *h)
+{
+	struct hlist_node *old_first = h->first;
+	//pr_info(">>>> @@@"
+	//	"base[%px] "
+	//	"data_base[%px] "
+	//	"new_node[%px], "
+	//	"head[%px]",
+	//	cxl_base, 
+	//	data_base, 
+	//	n, 
+	//	h);
+	//pr_info(
+	//	"head->first[%px], "
+	//	"&h->first[%px] "
+	//	"&n->next[%px]",
+	//	h->first, &h->first, &n->next);
+	// Insert N to the head of the bucket. The new item next node will be the head
+	//  of the list.
+	WRITE_ONCE(n->next, old_first);
+
+	// If the first not empty, make the old first point holder to &n->next.
+	if (old_first)
+		WRITE_ONCE((OFFSET_TO_ADDR_NODE(old_first, cxl_base))->pprev,
+			   ADDR_TO_OFFSET_NODE_2(&n->next, cxl_base));
+
+	// head first item is n.
+	WRITE_ONCE(h->first, ADDR_TO_OFFSET_NODE_1(n, cxl_base));
+
+	// n's holder is &h->first.
+	WRITE_ONCE(n->pprev, ADDR_TO_OFFSET_NODE_2(&h->first, cxl_base));
+	// pr_info("<<< @@@ "
+	// 	"n->next[%px] "
+	// 	"first->pprev[%px] "
+	// 	"h->first[%px] "
+	// 	"n->pprev[%px]",
+	// 	(void *)n->next,
+	// 	old_first != NULL ?
+	// 		(void *)(OFFSET_TO_ADDR_NODE(old_first, cxl_base))
+	// 			->pprev :
+	// 		NULL,
+	// 	(void *)h->first, (void *)n->pprev);
+}
 
 static void cxl_mem_test(void) {
 	struct cxl_entry *obj =
 		(struct cxl_entry *)(data_base +
 				     allocate_index * sizeof(struct cxl_entry));
 	sprintf(obj->payload, "Hello %u", allocate_index);
-	obj->key = allocate_index++;
 	INIT_HLIST_NODE(&obj->node);
-	pr_info("@@@@@@Read %u index to the memory", allocate_index);
+	// pr_info("@@@@@@Read %u index to the memory, the obj [%px] size[%zu]",
+	// 	allocate_index, obj, sizeof(struct cxl_entry));
 
-	hlist_add_head(&obj->node,
-		       cxl_ht[cxl_hash_min(obj->key, CXL_HASH_BITS)]);
+	obj->key = allocate_index++;
+
+	cxl_hlist_add_head(&obj->node,
+			   cxl_ht[cxl_hash_min(obj->key, CXL_HASH_BITS)]);
+	pr_info("=================Finished the mem test");
 }
 
 static void cxl_mem_read1(void) {
@@ -117,6 +176,8 @@ static void cxl_mem_init(void) {
 		cxl_ht[i]->first = NULL; // Checks the HLIST_HEAD_INIT.
 		INIT_HLIST_HEAD(cxl_ht[i]);
 	}
+	pr_info("@@@@@ bucket_count[%d] offset[%lu]", BUCKET_COUNT,
+		sizeof(struct hlist_head) * BUCKET_COUNT);
 	data_base = cxl_base + sizeof(struct hlist_head) * BUCKET_COUNT;
 }
 
@@ -524,9 +585,10 @@ int __init nfs_init_readpagecache(void)
 	cxl_mem_init();
 	cxl_mem_test();
 	cxl_mem_test();
+	cxl_mem_test();
 
-	cxl_mem_read1();
-	cxl_mem_read2();
+	//cxl_mem_read1();
+	//cxl_mem_read2();
 	return 0;
 }
 
