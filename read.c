@@ -176,6 +176,7 @@ static void cxl_mem_read1(void) {
 			break;
 		}
 	}
+	pr_info("@@@@@ Read done cxl_mem_read1");
 }
 
 static void cxl_mem_read2(void) {
@@ -189,6 +190,7 @@ static void cxl_mem_read2(void) {
 			break;
 		}
 	}
+	pr_info("@@@@@ Read done cxl_mem_read2");
 }
 
 static void cxl_mem_init(void) {
@@ -207,6 +209,21 @@ static void cxl_mem_init(void) {
 	data_base = cxl_base + sizeof(struct hlist_head) * BUCKET_COUNT;
 }
 
+static void cxl_mem_init_guest(void) {
+	if (cxl_base != NULL) return;
+	cxl_base = memremap(CXL_ADDR, REGION_SIZE, MEMREMAP_WB);
+	if (!cxl_base) {
+		pr_err("@@@@@@Failed to memory map !!!!!!!!!");
+	}
+	cxl_ht = (struct hlist_head (*)[BUCKET_COUNT])cxl_base;
+	// for (unsigned int i = 0u; i < BUCKET_COUNT; i++) {
+	// 	cxl_ht[i]->first = NULL; // Checks the HLIST_HEAD_INIT.
+	// 	INIT_HLIST_HEAD(cxl_ht[i]);
+	// }
+	pr_info("@@@@@ bucket_count[%d] offset[%lu]", BUCKET_COUNT,
+		sizeof(struct hlist_head) * BUCKET_COUNT);
+	data_base = cxl_base + sizeof(struct hlist_head) * BUCKET_COUNT;
+}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -608,10 +625,7 @@ int __init nfs_init_readpagecache(void)
 	if (nfs_rdata_cachep == NULL)
 		return -ENOMEM;
 
-	cxl_mem_init();
-	cxl_mem_test();
-	cxl_mem_test();
-	cxl_mem_test();
+	cxl_mem_init_guest();
 
 	cxl_mem_read1();
 	cxl_mem_read2();
