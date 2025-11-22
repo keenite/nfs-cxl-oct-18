@@ -21,6 +21,7 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_page.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 
 #include <linux/hashtable.h>
 
@@ -52,6 +53,8 @@ static struct kmem_cache *nfs_rdata_cachep;
 #define BUCKET_COUNT (1 << CXL_HASH_BITS_SIZE)
 
 #define CXL_HASH_BITS ilog2(BUCKET_COUNT)   // HASH_BITS(name)
+
+static int host_num = 1;
 
 /* Use hash_32 when possible to allow for fast 32bit hashing in 64bit kernels. */
 #define cxl_hash_min(val, bits)							\
@@ -625,10 +628,18 @@ int __init nfs_init_readpagecache(void)
 	if (nfs_rdata_cachep == NULL)
 		return -ENOMEM;
 
-	cxl_mem_init_guest();
-
-	cxl_mem_read1();
-	cxl_mem_read2();
+	if (host_num == 1) {
+		cxl_mem_init();
+		cxl_mem_test();
+		cxl_mem_test();
+		cxl_mem_test();
+		cxl_mem_read1();
+		cxl_mem_read2();
+	} else {
+		cxl_mem_init_guest();
+		cxl_mem_read1();
+		cxl_mem_read2();
+	}
 
 	pr_info("The cache initialization is done.");
 	return 0;
@@ -646,3 +657,5 @@ static const struct nfs_rw_ops nfs_rw_read_ops = {
 	.rw_result		= nfs_readpage_result,
 	.rw_initiate		= nfs_initiate_read,
 };
+
+module_param(host_num, int, 0644);
