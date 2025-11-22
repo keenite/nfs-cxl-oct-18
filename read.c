@@ -107,6 +107,18 @@ void  *data_base = NULL;
 #define OFFSET_TO_ADDR_NODE(offset, base) \
 	(struct hlist_node *)(((unsigned long)offset + (unsigned long)base))
 
+#define OFFSET_TO_ADDR_NODE_2(offset, base) \
+	(struct hlist_node **)(((unsigned long)offset + (unsigned long)base))
+
+static inline void cxl_hash_del(struct hlist_node *n) {
+	struct hlist_node *next = n->next;
+	struct hlist_node **pprev = n->pprev;
+
+	WRITE_ONCE(*(OFFSET_TO_ADDR_NODE_2(pprev, cxl_base)), next);
+	if (next)
+		WRITE_ONCE((OFFSET_TO_ADDR_NODE(next, cxl_base))->pprev, pprev);
+}
+
 static inline void cxl_hlist_add_head(struct hlist_node *n, struct hlist_head *h)
 {
 	struct hlist_node *old_first = h->first;
@@ -165,6 +177,17 @@ static void cxl_mem_test(void) {
 	cxl_hlist_add_head(&obj->node,
 			   cxl_ht[cxl_hash_min(obj->key, CXL_HASH_BITS)]);
 	pr_info("=================Finished the mem test");
+}
+
+static void cxl_mem_remove(void) {
+	struct cxl_entry *obj =
+		(struct cxl_entry *)(data_base +
+				     2 * sizeof(struct cxl_entry));
+	// pr_info("@@@@@@Read %u index to the memory, the obj [%px] size[%zu]",
+	// 	allocate_index, obj, sizeof(struct cxl_entry));
+	cxl_hash_del(&obj->node);
+
+	pr_info("=================Finished the mem remove");
 }
 
 static void cxl_mem_read1(void) {
@@ -635,6 +658,8 @@ int __init nfs_init_readpagecache(void)
 		cxl_mem_test();
 		cxl_mem_read1();
 		cxl_mem_read2();
+		cxl_mem_remove();
+		cxl_mem_read2(); // should fail
 	} else {
 		cxl_mem_init_guest();
 		cxl_mem_read1();
